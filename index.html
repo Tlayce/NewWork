@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WiFi Voucher</title>
+  <script src="https://js.paystack.co/v1/inline.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: sans-serif;
+      background: #f0f4f8;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 30px 16px;
+    }
+    h1 { font-size: 1.6rem; color: #1a1a2e; margin-bottom: 6px; }
+    p.sub { color: #666; font-size: 14px; margin-bottom: 24px; }
+    .plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; width: 100%; max-width: 520px; }
+    .plan {
+      background: #fff;
+      border: 2px solid #e0e0e0;
+      border-radius: 12px;
+      padding: 18px 12px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .plan:hover { border-color: #4CAF50; transform: translateY(-2px); }
+    .plan.selected { border-color: #4CAF50; background: #f0fff0; }
+    .plan .name { font-weight: 600; font-size: 15px; color: #1a1a2e; }
+    .plan .detail { font-size: 12px; color: #888; margin: 4px 0 8px; }
+    .plan .price { font-size: 1.4rem; font-weight: 700; color: #4CAF50; }
+    .plan .best { font-size: 11px; color: #aaa; margin-top: 4px; }
+    .buy-btn {
+      margin-top: 24px;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      padding: 14px 40px;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      max-width: 520px;
+      transition: background 0.2s;
+    }
+    .buy-btn:disabled { background: #ccc; cursor: not-allowed; }
+    .buy-btn:hover:not(:disabled) { background: #43a047; }
+    .voucher-box {
+      display: none;
+      margin-top: 30px;
+      background: #fff;
+      border: 2px dashed #4CAF50;
+      border-radius: 12px;
+      padding: 30px 20px;
+      text-align: center;
+      width: 100%;
+      max-width: 520px;
+    }
+    .voucher-box h2 { color: #4CAF50; margin-bottom: 10px; }
+    .voucher-code {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: 6px;
+      color: #1a1a2e;
+      background: #f0fff0;
+      padding: 16px;
+      border-radius: 8px;
+      margin: 12px 0;
+    }
+    .voucher-box p { color: #666; font-size: 14px; }
+    .error { color: red; font-size: 14px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+
+  <h1>📶 Buy WiFi</h1>
+  <p class="sub">Select a plan and pay to get your voucher instantly</p>
+
+  <div class="plans">
+    <div class="plan" onclick="selectPlan(this, '1 Hour', 1000, '1 Hour')" >
+      <div class="name">1 Hour</div>
+      <div class="detail">1 Hour</div>
+      <div class="price">GHS 10</div>
+      <div class="best">Short visits</div>
+    </div>
+    <div class="plan" onclick="selectPlan(this, '2 Hours', 1700, '2 Hours')">
+      <div class="name">2 Hours</div>
+      <div class="detail">2 Hours</div>
+      <div class="price">GHS 17</div>
+      <div class="best">Brief stay</div>
+    </div>
+    <div class="plan" onclick="selectPlan(this, 'Starter', 300, '1GB')">
+      <div class="name">Starter</div>
+      <div class="detail">1GB</div>
+      <div class="price">GHS 3</div>
+      <div class="best">Light browsing</div>
+    </div>
+    <div class="plan" onclick="selectPlan(this, 'Standard', 800, '3GB')">
+      <div class="name">Standard</div>
+      <div class="detail">3GB</div>
+      <div class="price">GHS 8</div>
+      <div class="best">Everyday use</div>
+    </div>
+    <div class="plan" onclick="selectPlan(this, 'Popular', 1500, '6GB')">
+      <div class="name">Popular</div>
+      <div class="detail">6GB</div>
+      <div class="price">GHS 15</div>
+      <div class="best">Work from anywhere</div>
+    </div>
+  </div>
+
+  <button class="buy-btn" id="buyBtn" disabled onclick="startPayment()">Select a plan to continue</button>
+
+  <div class="voucher-box" id="voucherBox">
+    <h2>✅ Payment confirmed!</h2>
+    <p>Your WiFi login details are:</p>
+    <div class="voucher-code" id="voucherCode">—</div>
+    <p>Username & Password are the same code above.</p>
+    <p style="margin-top:8px;color:#999;font-size:12px">Enter this on the WiFi login page to connect.</p>
+  </div>
+
+  <p class="error" id="errorMsg"></p>
+
+  <script>
+    let selectedPlan = null;
+    let selectedAmount = 0;
+
+    function selectPlan(el, name, amount, detail) {
+      document.querySelectorAll('.plan').forEach(p => p.classList.remove('selected'));
+      el.classList.add('selected');
+      selectedPlan = name;
+      selectedAmount = amount;
+      const btn = document.getElementById('buyBtn');
+      btn.disabled = false;
+      btn.textContent = `Pay GHS ${amount / 100} for ${name}`;
+    }
+
+    function startPayment() {
+      const email = prompt('Enter your email address:');
+      if (!email || !email.includes('@')) {
+        document.getElementById('errorMsg').textContent = 'Please enter a valid email.';
+        return;
+      }
+
+      const handler = PaystackPop.setup({
+        key: 'pk_live_14fba6e935040abe4c86e481cb3938386bfc2182',
+        email: email,
+        amount: selectedAmount,
+        currency: 'GHS',
+        ref: 'WIFI_' + Date.now(),
+        metadata: { plan: selectedPlan },
+        callback: function(response) {
+          fetchVoucher(response.reference);
+        },
+        onClose: function() {
+          document.getElementById('errorMsg').textContent = 'Payment cancelled.';
+        }
+      });
+      handler.openIframe();
+    }
+
+    async function fetchVoucher(reference) {
+      document.getElementById('buyBtn').textContent = '⏳ Getting your voucher...';
+      document.getElementById('buyBtn').disabled = true;
+      document.getElementById('errorMsg').textContent = '';
+
+      try {
+        const res = await fetch(`https://hotspot-voucher.onrender.com/voucher?reference=${reference}&plan=${encodeURIComponent(selectedPlan)}`);
+        const data = await res.json();
+
+        if (data.voucher) {
+          document.getElementById('voucherCode').textContent = data.voucher;
+          document.getElementById('voucherBox').style.display = 'block';
+          document.getElementById('buyBtn').style.display = 'none';
+        } else {
+          document.getElementById('errorMsg').textContent = data.error || 'Something went wrong. Contact support with ref: ' + reference;
+          document.getElementById('buyBtn').disabled = false;
+          document.getElementById('buyBtn').textContent = `Pay GHS ${selectedAmount / 100} for ${selectedPlan}`;
+        }
+      } catch (err) {
+        document.getElementById('errorMsg').textContent = 'Could not connect. Contact support with ref: ' + reference;
+        document.getElementById('buyBtn').disabled = false;
+      }
+    }
+  </script>
+
+</body>
+</html>

@@ -7,6 +7,18 @@ app.use(express.json());
 let vouchers = process.env.VOUCHERS ? process.env.VOUCHERS.split(',') : [];
 const usedVouchers = {};
 
+// Verify payment directly with Paystack
+async function verifyPayment(reference) {
+  const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
+    headers: {
+      Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
+    }
+  });
+  const data = await response.json();
+  return data.status === true && data.data.status === 'success';
+}
+
+// Keep webhook as backup
 app.post('/webhook/paystack', (req, res) => {
   const hash = crypto
     .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY)
@@ -21,51 +33,84 @@ app.post('/webhook/paystack', (req, res) => {
 
   if (event.event === 'charge.success') {
     const reference = event.data.reference;
-    if (usedVouchers[reference]) return res.sendStatus(200);
-    const voucher = vouchers.shift();
-    if (voucher) {
-      usedVouchers[reference] = voucher;
-      console.log(`Voucher ${voucher} assigned to ${reference}`);
+    if (!usedVouchers[reference]) {
+      const voucher = vouchers.shift();
+      if (voucher) {
+        usedVouchers[reference] = voucher;
+        console.log(`Voucher ${voucher} assigned via webhook to ${reference}`);
+      }
     }
   }
 
   res.sendStatus(200);
 });
 
-app.get('/success', (req, res) => {
+// Success page — verifies payment directly with Paystack
+app.get('/success', async (req, res) => {
   const reference = req.query.reference;
-  const voucher = usedVouchers[reference];
 
-  if (!voucher) {
+  if (!reference) {
     return res.send(`
       <html>
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Processing...</title>
-        <script>
-          let attempts = 0;
-          function tryRefresh() {
-            attempts++;
-            if (attempts < 10) {
-              setTimeout(() => {
-                window.location.reload();
-              }, 3000);
-            }
-          }
-          window.onload = tryRefresh;
-        </script>
-      </head>
       <body style="font-family:sans-serif;text-align:center;padding:40px;max-width:400px;margin:auto">
-        <h2>⏳ Processing your payment...</h2>
-        <p>Please wait, your voucher is being prepared.</p>
-        <p style="color:#999;font-size:14px">This page will refresh automatically.</p>
+        <h2>⚠️ No payment reference found</h2>
+        <p>Please contact support.</p>
       </body>
       </html>
     `);
   }
 
-  res.send(`
+  // If voucher already assigned, show it
+  if (usedVouchers[reference]) {
+    const voucher = usedVouchers[reference];
+    return res.send(voucherPage(voucher));
+  }
+
+  // Otherwise verify directly with Paystack
+  try {
+    const success = await verifyPayment(reference);
+
+    if (success) {
+      const voucher = vouchers.shift();
+      if (voucher) {
+        usedVouchers[reference] = voucher;
+        console.log(`Voucher ${voucher} assigned via verify to ${reference}`);
+        return res.send(voucherPage(voucher));
+      } else {
+        return res.send(`
+          <html>
+          <body style="font-family:sans-serif;text-align:center;padding:40px;max-width:400px;margin:auto">
+            <h2>⚠️ No vouchers available</h2>
+            <p>Please contact support with your reference: <strong>${reference}</strong></p>
+          </body>
+          </html>
+        `);
+      }
+    } else {
+      return res.send(`
+        <html>
+        <body style="font-family:sans-serif;text-align:center;padding:40px;max-width:400px;margin:auto">
+          <h2>⚠️ Payment not confirmed</h2>
+          <p>Please contact support with your reference: <strong>${reference}</strong></p>
+        </body>
+        </html>
+      `);
+    }
+  } catch (err) {
+    console.error('Verify error:', err);
+    return res.send(`
+      <html>
+      <body style="font-family:sans-serif;text-align:center;padding:40px;max-width:400px;margin:auto">
+        <h2>⚠️ Something went wrong</h2>
+        <p>Please contact support with your reference: <strong>${reference}</strong></p>
+      </body>
+      </html>
+    `);
+  }
+});
+
+function voucherPage(voucher) {
+  return `
     <html>
     <head>
       <meta charset="UTF-8">
@@ -84,8 +129,8 @@ app.get('/success', (req, res) => {
       <p style="color:#666;font-size:14px">Enter these on the WiFi login page to connect.</p>
     </body>
     </html>
-  `);
-});
+  `;
+}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Running on port ${PORT}`));

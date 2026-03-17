@@ -5,6 +5,9 @@ const app = express();
 app.use(express.json());
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
@@ -16,12 +19,10 @@ app.get('/voucher', async (req, res) => {
 
   if (!reference) return res.json({ error: 'No reference provided' });
 
-  // Return existing voucher if already assigned
   if (usedVouchers[reference]) {
     return res.json({ voucher: usedVouchers[reference] });
   }
 
-  // Verify payment with Paystack
   try {
     const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
       headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }

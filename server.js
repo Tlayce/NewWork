@@ -31,13 +31,7 @@ async function supabase(method, path, body) {
 
 // Map plan name from store to plan key in DB
 function getPlanKey(plan) {
-  const p = (plan || '').toLowerCase();
-  if (p.includes('1 hour') || p.includes('1hr')) return '1HR';
-  if (p.includes('2 hour') || p.includes('2hr')) return '2HR';
-  if (p.includes('1gb')) return '1GB';
-  if (p.includes('3gb')) return '3GB';
-  if (p.includes('6gb')) return '6GB';
-  return null;
+  return plan || null;
 }
 
 app.get('/voucher', async (req, res) => {

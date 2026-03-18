@@ -14,22 +14,31 @@ app.use((req, res, next) => {
 const SUPABASE_URL = 'https://hvquabbuaqlosxlswhve.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-// Query Supabase
-async function supabase(method, path, body) {
+async function supabaseGet(path) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    method: method,
+    method: 'GET',
     headers: {
       'apikey': SUPABASE_KEY,
       'Authorization': `Bearer ${SUPABASE_KEY}`,
-      'Content-Type': 'application/json',
-      'Prefer': method === 'POST' ? 'return=representation' : ''
-    },
-    body: body ? JSON.stringify(body) : undefined
+      'Content-Type': 'application/json'
+    }
   });
   return res.json();
 }
 
-// Map plan name from store to plan key in DB
+async function supabasePatch(path, body) {
+  await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'PATCH',
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal'
+    },
+    body: JSON.stringify(body)
+  });
+}
+
 function getPlanKey(plan) {
   return plan || null;
 }
@@ -39,14 +48,14 @@ app.get('/voucher', async (req, res) => {
 
   if (!reference) return res.json({ error: 'No reference provided' });
 
-  // Check if voucher already assigned for this reference
-  const existing = await supabase('GET', `vouchers?reference=eq.${reference}&used=eq.true&select=code`);
-  if (existing && existing.length > 0) {
-    return res.json({ voucher: existing[0].code });
-  }
-
-  // Verify payment with Paystack
   try {
+    // Check if voucher already assigned for this reference
+    const existing = await supabaseGet(`vouchers?reference=eq.${reference}&used=eq.true&select=code`);
+    if (existing && existing.length > 0) {
+      return res.json({ voucher: existing[0].code });
+    }
+
+    // Verify payment with Paystack
     const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
       headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
     });
@@ -60,7 +69,7 @@ app.get('/voucher', async (req, res) => {
       }
 
       // Get first available voucher for this plan
-      const available = await supabase('GET', `vouchers?plan=eq.${planKey}&used=eq.false&select=id,code&limit=1`);
+      const available = await supabaseGet(`vouchers?plan=eq.${encodeURIComponent(planKey)}&used=eq.false&select=id,code&limit=1`);
 
       if (!available || available.length === 0) {
         return res.json({ error: 'No vouchers available for this plan. Contact support. Ref: ' + reference });
@@ -68,8 +77,8 @@ app.get('/voucher', async (req, res) => {
 
       const voucher = available[0];
 
-      // Mark voucher as used
-      await supabase('PATCH', `vouchers?id=eq.${voucher.id}`, {
+      // Mark voucher as used — returns empty body so we don't parse it
+      await supabasePatch(`vouchers?id=eq.${voucher.id}`, {
         used: true,
         reference: reference
       });

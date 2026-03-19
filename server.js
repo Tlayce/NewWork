@@ -39,23 +39,35 @@ async function supabasePatch(path, body) {
   });
 }
 
+async function supabasePost(path, body) {
+  await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal'
+    },
+    body: JSON.stringify(body)
+  });
+}
+
 function getPlanKey(plan) {
   return plan || null;
 }
 
+// Voucher endpoint
 app.get('/voucher', async (req, res) => {
   const { reference, plan } = req.query;
 
   if (!reference) return res.json({ error: 'No reference provided' });
 
   try {
-    // Check if voucher already assigned for this reference
     const existing = await supabaseGet(`vouchers?reference=eq.${reference}&used=eq.true&select=code`);
     if (existing && existing.length > 0) {
       return res.json({ voucher: existing[0].code });
     }
 
-    // Verify payment with Paystack
     const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
       headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
     });
@@ -63,26 +75,15 @@ app.get('/voucher', async (req, res) => {
 
     if (data.status === true && data.data.status === 'success') {
       const planKey = getPlanKey(plan);
+      if (!planKey) return res.json({ error: 'Unknown plan. Contact support. Ref: ' + reference });
 
-      if (!planKey) {
-        return res.json({ error: 'Unknown plan. Contact support. Ref: ' + reference });
-      }
-
-      // Get first available voucher for this plan
       const available = await supabaseGet(`vouchers?plan=eq.${encodeURIComponent(planKey)}&used=eq.false&select=id,code&limit=1`);
-
       if (!available || available.length === 0) {
         return res.json({ error: 'No vouchers available for this plan. Contact support. Ref: ' + reference });
       }
 
       const voucher = available[0];
-
-      // Mark voucher as used — returns empty body so we don't parse it
-      await supabasePatch(`vouchers?id=eq.${voucher.id}`, {
-        used: true,
-        reference: reference
-      });
-
+      await supabasePatch(`vouchers?id=eq.${voucher.id}`, { used: true, reference: reference });
       console.log(`Voucher ${voucher.code} [${planKey}] assigned to ${reference}`);
       return res.json({ voucher: voucher.code });
 
@@ -92,6 +93,60 @@ app.get('/voucher', async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.json({ error: 'Verification failed. Contact support. Ref: ' + reference });
+  }
+});
+
+// Record login time for hour bundle users
+app.get('/login', async (req, res) => {
+  const { username, limit } = req.query;
+  if (!username || !limit) return res.json({ ok: false });
+
+  try {
+    // Check if already recorded — don't overwrite first login time
+    const existing = await supabaseGet(`logins?username=eq.${encodeURIComponent(username)}&select=id`);
+    if (existing && existing.length > 0) {
+      return res.json({ ok: true, existing: true });
+    }
+
+    await supabasePost('logins', {
+      username: username,
+      login_time: new Date().toISOString(),
+      limit_seconds: parseInt(limit)
+    });
+
+    console.log(`Login recorded: ${username} limit=${limit}s`);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    return res.json({ ok: false });
+  }
+});
+
+// Return remaining time for hour bundle users
+app.get('/timeleft', async (req, res) => {
+  const { username } = req.query;
+  if (!username) return res.json({ error: 'No username' });
+
+  try {
+    const rows = await supabaseGet(`logins?username=eq.${encodeURIComponent(username)}&select=login_time,limit_seconds`);
+    if (!rows || rows.length === 0) {
+      return res.json({ error: 'No login record found' });
+    }
+
+    const loginTime = new Date(rows[0].login_time);
+    const limitSecs = rows[0].limit_seconds;
+    const elapsed = Math.floor((Date.now() - loginTime.getTime()) / 1000);
+    const remaining = Math.max(0, limitSecs - elapsed);
+
+    return res.json({
+      remaining_seconds: remaining,
+      limit_seconds: limitSecs,
+      elapsed_seconds: elapsed,
+      expired: remaining === 0
+    });
+  } catch (err) {
+    console.error(err);
+    return res.json({ error: 'Failed to get time' });
   }
 });
 

@@ -52,11 +52,21 @@ async function supabasePost(path, body) {
   });
 }
 
+async function supabaseDelete(path) {
+  await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'DELETE',
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
+}
+
 function getPlanKey(plan) {
   return plan || null;
 }
 
-// Check stock and send alert if low
 async function checkStock(plan) {
   try {
     const rows = await supabaseGet(`vouchers?plan=eq.${encodeURIComponent(plan)}&used=eq.false&select=id`);
@@ -76,13 +86,11 @@ app.get('/voucher', async (req, res) => {
   if (!reference) return res.json({ error: 'No reference provided' });
 
   try {
-    // Check if already assigned
     const existing = await supabaseGet(`vouchers?reference=eq.${reference}&used=eq.true&select=code`);
     if (existing && existing.length > 0) {
       return res.json({ voucher: existing[0].code });
     }
 
-    // Verify payment with Paystack
     const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
       headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
     });
@@ -100,10 +108,7 @@ app.get('/voucher', async (req, res) => {
       const voucher = available[0];
       await supabasePatch(`vouchers?id=eq.${voucher.id}`, { used: true, reference: reference });
       console.log(`Voucher ${voucher.code} [${planKey}] assigned to ${reference}`);
-
-      // Check stock after assigning
       await checkStock(planKey);
-
       return res.json({ voucher: voucher.code });
 
     } else {
@@ -161,6 +166,33 @@ app.get('/timeleft', async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.json({ error: 'Failed to get time' });
+  }
+});
+
+// Return list of expired hour bundle users
+app.get('/expired', async (req, res) => {
+  try {
+    const rows = await supabaseGet('logins?select=username,login_time,limit_seconds');
+    if (!rows || rows.length === 0) return res.json({ expired: [] });
+
+    const now = Date.now();
+    const expired = rows
+      .filter(r => {
+        const elapsed = Math.floor((now - new Date(r.login_time).getTime()) / 1000);
+        return elapsed >= r.limit_seconds;
+      })
+      .map(r => r.username);
+
+    // Clean up expired records from logins table
+    for (const username of expired) {
+      await supabaseDelete(`logins?username=eq.${encodeURIComponent(username)}`);
+    }
+
+    console.log(`Expired users: ${expired.join(', ') || 'none'}`);
+    return res.json({ expired });
+  } catch (err) {
+    console.error(err);
+    return res.json({ expired: [] });
   }
 });
 

@@ -120,6 +120,24 @@ app.get('/voucher', async (req, res) => {
   }
 });
 
+// Get data limit for a user
+app.get('/datalimit', async (req, res) => {
+  const { code } = req.query;
+  if (!code) return res.json({ error: 'No code provided' });
+
+  try {
+    const rows = await supabaseGet(`vouchers?code=eq.${encodeURIComponent(code)}&select=plan,limit_bytes`);
+    if (!rows || rows.length === 0) return res.json({ limit_bytes: 0 });
+    return res.json({
+      plan: rows[0].plan,
+      limit_bytes: rows[0].limit_bytes || 0
+    });
+  } catch (err) {
+    console.error(err);
+    return res.json({ limit_bytes: 0 });
+  }
+});
+
 // Record login time for hour bundle users
 app.get('/login', async (req, res) => {
   const { username, limit } = req.query;
@@ -168,6 +186,7 @@ app.get('/timeleft', async (req, res) => {
     return res.json({ error: 'Failed to get time' });
   }
 });
+
 // Return list of expired hour bundle users
 app.get('/expired', async (req, res) => {
   try {
@@ -190,7 +209,7 @@ app.get('/expired', async (req, res) => {
   }
 });
 
-// Clean up expired logins — called by MikroTik after disabling user
+// Clean up expired login record
 app.get('/cleanup', async (req, res) => {
   const { username } = req.query;
   if (!username) return res.json({ ok: false });
@@ -203,5 +222,6 @@ app.get('/cleanup', async (req, res) => {
     return res.json({ ok: false });
   }
 });
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Running on port ${PORT}`));

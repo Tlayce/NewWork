@@ -1,6 +1,5 @@
 const express = require('express');
 const crypto = require('crypto');
-const net = require('net');
 const app = express();
 
 app.use(express.json());
@@ -53,136 +52,22 @@ async function supabasePost(path, body) {
   });
 }
 
-// Generate random 5 character code
-function generateCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < 5; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
+function getPlanKey(plan) {
+  return plan || null;
+}
+
+// Check stock and send alert if low
+async function checkStock(plan) {
+  try {
+    const rows = await supabaseGet(`vouchers?plan=eq.${encodeURIComponent(plan)}&used=eq.false&select=id`);
+    const count = rows ? rows.length : 0;
+    console.log(`Stock check: ${plan} has ${count} remaining`);
+    if (count <= 10) {
+      console.log(`LOW STOCK ALERT: ${plan} only has ${count} vouchers left!`);
+    }
+  } catch (err) {
+    console.error('Stock check error:', err);
   }
-  return code;
-}
-
-// Get MikroTik profile name from plan
-function getProfile(plan) {
-  const p = (plan || '').toLowerCase();
-  if (p.includes('1 hour')) return '1hr';
-  if (p.includes('2 hour')) return '2hr';
-  if (p.includes('1gb')) return '1gb-starter';
-  if (p.includes('3gb')) return '3gb-standard';
-  if (p.includes('6gb')) return '6gb-popular';
-  return null;
-}
-
-// Create hotspot user on MikroTik via API
-function createMikrotikUser(code, profile) {
-  return new Promise((resolve, reject) => {
-    const host = process.env.MIKROTIK_HOST;
-    const user = process.env.MIKROTIK_USER;
-    const pass = process.env.MIKROTIK_PASS;
-
-    const socket = new net.Socket();
-    socket.setTimeout(10000);
-
-    let buffer = Buffer.alloc(0);
-    let loggedIn = false;
-    let userCreated = false;
-
-    function encodeLength(len) {
-      if (len < 0x80) return Buffer.from([len]);
-      if (len < 0x4000) return Buffer.from([((len >> 8) & 0xFF) | 0x80, len & 0xFF]);
-      return Buffer.from([((len >> 16) & 0xFF) | 0xC0, (len >> 8) & 0xFF, len & 0xFF]);
-    }
-
-    function encodeSentence(words) {
-      let parts = [];
-      for (const word of words) {
-        const wb = Buffer.from(word, 'utf8');
-        parts.push(encodeLength(wb.length));
-        parts.push(wb);
-      }
-      parts.push(Buffer.from([0])); // end of sentence
-      return Buffer.concat(parts);
-    }
-
-    function sendSentence(words) {
-      socket.write(encodeSentence(words));
-    }
-
-    function md5(str) {
-      return crypto.createHash('md5').update(str).digest();
-    }
-
-    socket.connect(8728, host, () => {});
-
-    socket.on('data', (data) => {
-      buffer = Buffer.concat([buffer, data]);
-
-      // Parse sentences from buffer
-      while (buffer.length > 0) {
-        let pos = 0;
-        let words = [];
-
-        while (pos < buffer.length) {
-          if (buffer[pos] === 0) { pos++; break; } // end of sentence
-          let len = 0;
-          if ((buffer[pos] & 0xE0) === 0xC0) {
-            len = ((buffer[pos] & 0x3F) << 16) | (buffer[pos+1] << 8) | buffer[pos+2];
-            pos += 3;
-          } else if ((buffer[pos] & 0xC0) === 0x80) {
-            len = ((buffer[pos] & 0x3F) << 8) | buffer[pos+1];
-            pos += 2;
-          } else {
-            len = buffer[pos];
-            pos += 1;
-          }
-          if (pos + len > buffer.length) return; // wait for more data
-          words.push(buffer.slice(pos, pos + len).toString('utf8'));
-          pos += len;
-        }
-
-        buffer = buffer.slice(pos);
-
-        if (words.length === 0) continue;
-
-        if (!loggedIn) {
-          // Look for challenge
-          const challenge = words.find(w => w.startsWith('=ret='));
-          if (challenge) {
-            const challengeHex = challenge.substring(5);
-            const challengeBuf = Buffer.from(challengeHex, 'hex');
-            const passBuf = Buffer.from(pass, 'utf8');
-            const nullBuf = Buffer.from([0]);
-            const hash = md5(Buffer.concat([nullBuf, passBuf, challengeBuf]));
-            const response = '00' + hash.toString('hex');
-            sendSentence(['/login', `=name=${user}`, `=response=${response}`]);
-            loggedIn = true;
-          } else if (words[0] === '!done') {
-            // RouterOS 7 — no challenge needed, already logged in
-            loggedIn = true;
-            sendSentence([
-              '/ip/hotspot/user/add',
-              `=name=${code}`,
-              `=password=${code}`,
-              `=profile=${profile}`
-            ]);
-          }
-        } else if (!userCreated) {
-          if (words[0] === '!done') {
-            userCreated = true;
-            socket.destroy();
-            resolve(true);
-          } else if (words[0] === '!trap') {
-            socket.destroy();
-            reject(new Error(words.find(w => w.startsWith('=message=')) || 'MikroTik error'));
-          }
-        }
-      }
-    });
-
-    socket.on('timeout', () => { socket.destroy(); reject(new Error('Timeout')); });
-    socket.on('error', (err) => reject(err));
-  });
 }
 
 // Voucher endpoint
@@ -204,31 +89,22 @@ app.get('/voucher', async (req, res) => {
     const data = await response.json();
 
     if (data.status === true && data.data.status === 'success') {
-      const profile = getProfile(plan);
-      if (!profile) return res.json({ error: 'Unknown plan. Contact support. Ref: ' + reference });
+      const planKey = getPlanKey(plan);
+      if (!planKey) return res.json({ error: 'Unknown plan. Contact support. Ref: ' + reference });
 
-      // Generate unique code
-      let code = generateCode();
-
-      // Create user on MikroTik
-      try {
-        await createMikrotikUser(code, profile);
-        console.log(`MikroTik user created: ${code} [${profile}]`);
-      } catch (err) {
-        console.error('MikroTik error:', err.message);
-        return res.json({ error: 'Could not create user. Contact support. Ref: ' + reference });
+      const available = await supabaseGet(`vouchers?plan=eq.${encodeURIComponent(planKey)}&used=eq.false&select=id,code&limit=1`);
+      if (!available || available.length === 0) {
+        return res.json({ error: 'No vouchers available for this plan. Contact support. Ref: ' + reference });
       }
 
-      // Save to Supabase
-      await supabasePost('vouchers', {
-        code: code,
-        plan: plan,
-        used: true,
-        reference: reference
-      });
+      const voucher = available[0];
+      await supabasePatch(`vouchers?id=eq.${voucher.id}`, { used: true, reference: reference });
+      console.log(`Voucher ${voucher.code} [${planKey}] assigned to ${reference}`);
 
-      console.log(`Voucher ${code} [${plan}] assigned to ${reference}`);
-      return res.json({ voucher: code });
+      // Check stock after assigning
+      await checkStock(planKey);
+
+      return res.json({ voucher: voucher.code });
 
     } else {
       return res.json({ error: 'Payment not confirmed. Contact support. Ref: ' + reference });

@@ -168,7 +168,6 @@ app.get('/timeleft', async (req, res) => {
     return res.json({ error: 'Failed to get time' });
   }
 });
-
 // Return list of expired hour bundle users
 app.get('/expired', async (req, res) => {
   try {
@@ -183,11 +182,6 @@ app.get('/expired', async (req, res) => {
       })
       .map(r => r.username);
 
-    // Clean up expired records from logins table
-    for (const username of expired) {
-      await supabaseDelete(`logins?username=eq.${encodeURIComponent(username)}`);
-    }
-
     console.log(`Expired users: ${expired.join(', ') || 'none'}`);
     return res.json({ expired });
   } catch (err) {
@@ -196,5 +190,18 @@ app.get('/expired', async (req, res) => {
   }
 });
 
+// Clean up expired logins — called by MikroTik after disabling user
+app.get('/cleanup', async (req, res) => {
+  const { username } = req.query;
+  if (!username) return res.json({ ok: false });
+  try {
+    await supabaseDelete(`logins?username=eq.${encodeURIComponent(username)}`);
+    console.log(`Cleaned up login record for ${username}`);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    return res.json({ ok: false });
+  }
+});
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Running on port ${PORT}`));
